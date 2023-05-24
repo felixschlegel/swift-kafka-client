@@ -110,11 +110,11 @@ public final class KafkaConsumer {
 
         self.serialQueue = DispatchQueue(label: "swift-kafka.consumer.serial")
 
+        // TODO: add comment about memory management like in KafkaProducer
         let backpressureStrategy = ConsumerMessagesAsyncSequence.HighLowWatermark(
             lowWatermark: 5,
             highWatermark: 10
         )
-
         let messagesSequenceDelegate = ConsumerMessagesAsyncSequenceDelegate { [weak self] in
             self?.produceMore()
         } didTerminateClosure: { [weak self] in
@@ -300,8 +300,8 @@ public final class KafkaConsumer {
                 return
             }
 
-            let yieldresult = self.messagesSource.yield(messageResult)
-            switch yieldresult {
+            let yieldResult = self.messagesSource.yield(messageResult)
+            switch yieldResult {
             case .produceMore:
                 self.produceMore()
             case .dropped, .stopProducing:
