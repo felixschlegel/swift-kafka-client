@@ -12,7 +12,7 @@ The `sendAsync(_:)` method of `KafkaProducer` returns a message-id that can late
 var config = KafkaConfig()
 try config.set("localhost:9092", forKey: "bootstrap.servers")
 
-let producer = try await KafkaProducer(
+let producer = try KafkaProducer(
     config: config,
     logger: .kafkaTest // Your logger here
 )

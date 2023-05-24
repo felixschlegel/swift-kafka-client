@@ -108,7 +108,7 @@ public final class KafkaConsumer {
             throw KafkaError.rdKafkaError(wrapping: result)
         }
 
-        self.serialQueue = DispatchQueue(label: "swift-kafka-gsoc.consumer.serial")
+        self.serialQueue = DispatchQueue(label: "swift-kafka.consumer.serial")
 
         let backpressureStrategy = ConsumerMessagesAsyncSequence.HighLowWatermark(
             lowWatermark: 5,

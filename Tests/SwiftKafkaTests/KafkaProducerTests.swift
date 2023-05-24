@@ -51,7 +51,7 @@ final class KafkaProducerTests: XCTestCase {
     }
 
     func testSendAsync() async throws {
-        let producer = try await KafkaProducer(config: config, logger: .kafkaTest)
+        let producer = try KafkaProducer(config: config, logger: .kafkaTest)
 
         let expectedTopic = "test-topic"
         let message = KafkaProducerMessage(
@@ -79,7 +79,7 @@ final class KafkaProducerTests: XCTestCase {
     }
 
     func testSendAsyncEmptyMessage() async throws {
-        let producer = try await KafkaProducer(config: config, logger: .kafkaTest)
+        let producer = try KafkaProducer(config: config, logger: .kafkaTest)
 
         let expectedTopic = "test-topic"
         let message = KafkaProducerMessage(
@@ -106,7 +106,7 @@ final class KafkaProducerTests: XCTestCase {
     }
 
     func testSendAsyncTwoTopics() async throws {
-        let producer = try await KafkaProducer(config: config, logger: .kafkaTest)
+        let producer = try KafkaProducer(config: config, logger: .kafkaTest)
 
         let message1 = KafkaProducerMessage(
             topic: "test-topic1",
@@ -152,7 +152,7 @@ final class KafkaProducerTests: XCTestCase {
     }
 
     func testProducerNotUsableAfterShutdown() async throws {
-        let producer = try await KafkaProducer(config: config, logger: .kafkaTest)
+        let producer = try KafkaProducer(config: config, logger: .kafkaTest)
         await producer.shutdownGracefully()
 
         let message = KafkaProducerMessage(
@@ -168,7 +168,7 @@ final class KafkaProducerTests: XCTestCase {
 
     func testNoMemoryLeakAfterShutdown() async throws {
         var producer: KafkaProducer?
-        producer = try await KafkaProducer(config: self.config, logger: .kafkaTest)
+        producer = try KafkaProducer(config: self.config, logger: .kafkaTest)
 
         weak var producerCopy = producer
 

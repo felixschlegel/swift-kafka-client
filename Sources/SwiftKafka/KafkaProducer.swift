@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 import Crdkafka
+import Dispatch
 import Logging
 import NIOCore
 
@@ -52,7 +53,7 @@ public struct AcknowledgedMessagesAsyncSequence: AsyncSequence {
 /// Please make sure to explicitly call ``shutdownGracefully(timeout:)`` when the ``KafkaProducer`` is not used anymore.
 /// - Note: When messages get published to a non-existent topic, a new topic is created using the ``KafkaTopicConfig``
 /// configuration object (only works if server has `auto.create.topics.enable` property set).
-public actor KafkaProducer {
+public final class KafkaProducer {
     /// States that the ``KafkaProducer`` can have.
     private enum State {
         /// The ``KafkaProducer`` has started and is ready to use.
@@ -83,10 +84,13 @@ public actor KafkaProducer {
     /// Task that polls the Kafka cluster for updates periodically.
     private var pollTask: Task<Void, Never>!
 
+    /// Serial queue used to run all blocking operations. Additionally ensures that no data races occur.
+    private let serialQueue: DispatchQueue
+
     /// `AsyncSequence` that returns all ``KafkaProducerMessage`` objects that have been
     /// acknowledged by the Kafka cluster.
-    public nonisolated let acknowledgements: AcknowledgedMessagesAsyncSequence
-    nonisolated let acknowlegdementsSource: AcknowledgedMessagesAsyncSequence.WrappedSequence.Source
+    public let acknowledgements: AcknowledgedMessagesAsyncSequence
+    private let acknowlegdementsSource: AcknowledgedMessagesAsyncSequence.WrappedSequence.Source
     private typealias Acknowledgement = Result<KafkaAcknowledgedMessage, KafkaAcknowledgedMessageError>
 
     /// Initialize a new ``KafkaProducer``.
@@ -98,11 +102,13 @@ public actor KafkaProducer {
         config: KafkaConfig = KafkaConfig(),
         topicConfig: KafkaTopicConfig = KafkaTopicConfig(),
         logger: Logger
-    ) async throws {
+    ) throws {
         self.topicConfig = topicConfig
         self.logger = logger
         self.topicHandles = [:]
         self.state = .started
+
+        self.serialQueue = DispatchQueue(label: "swift-kafka.producer.serial")
 
         // (NIOAsyncSequenceProducer.makeSequence Documentation Excerpt)
         // This method returns a struct containing a NIOAsyncSequenceProducer.Source and a NIOAsyncSequenceProducer.
@@ -138,12 +144,12 @@ public actor KafkaProducer {
 
     // MARK: - Initialiser with new config
 
-    public init(
+    public convenience init(
         config: ProducerConfig = ProducerConfig(),
         topicConfig: TopicConfig = TopicConfig(),
         logger: Logger
-    ) async throws {
-        try await self.init(
+    ) throws {
+        try self.init(
             config: KafkaConfig(producerConfig: config),
             topicConfig: KafkaTopicConfig(topicConfig: topicConfig),
             logger: logger
@@ -156,22 +162,27 @@ public actor KafkaProducer {
     /// Afterwards, it shuts down the connection to Kafka and cleans any remaining state up.
     /// - Parameter timeout: Maximum amount of milliseconds this method waits for any outstanding messages to be sent.
     public func shutdownGracefully(timeout: Int32 = 10000) async {
-        switch self.state {
-        case .started:
-            self.state = .shuttingDown
-            await self._shutDownGracefully(timeout: timeout)
-        case .shuttingDown, .shutDown:
-            return
+        await withCheckedContinuation { continuation in
+            self.serialQueue.async {
+                switch self.state {
+                case .started:
+                    self.state = .shuttingDown
+                    self._shutDownGracefully(timeout: timeout, continuation: continuation)
+                case .shuttingDown, .shutDown:
+                    continuation.resume()
+                }
+            }
         }
     }
 
-    private func _shutDownGracefully(timeout: Int32) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            // Wait 10 seconds for outstanding messages to be sent and callbacks to be called
-            self.client.withKafkaHandlePointer { handle in
-                rd_kafka_flush(handle, timeout)
-                continuation.resume()
-            }
+    private func _shutDownGracefully(timeout: Int32, continuation: CheckedContinuation<Void, Never>) {
+        dispatchPrecondition(condition: .onQueue(self.serialQueue))
+        assert(self.state == .shuttingDown)
+
+        // Wait 10 seconds for outstanding messages to be sent and callbacks to be called
+        self.client.withKafkaHandlePointer { handle in
+            rd_kafka_flush(handle, timeout)
+            continuation.resume()
         }
 
         for (_, topicHandle) in self.topicHandles {
@@ -188,16 +199,23 @@ public actor KafkaProducer {
     /// - Returns: Unique message identifier matching the `id` property of the corresponding ``KafkaAcknowledgedMessage``
     /// - Throws: A ``KafkaError`` if sending the message failed.
     @discardableResult
-    public func sendAsync(_ message: KafkaProducerMessage) throws -> UInt {
-        switch self.state {
-        case .started:
-            return try self._sendAsync(message)
-        case .shuttingDown, .shutDown:
-            throw KafkaError.connectionClosed(reason: "Tried to produce a message with a closed producer")
+    public func sendAsync(_ message: KafkaProducerMessage) async throws -> UInt {
+        try await withCheckedThrowingContinuation { continuation in
+            self.serialQueue.async {
+                switch self.state {
+                case .started:
+                    self._sendAsync(message, continuation: continuation)
+                case .shuttingDown, .shutDown:
+                    continuation.resume(throwing: KafkaError.connectionClosed(reason: "Tried to produce a message with a closed producer"))
+                }
+            }
         }
     }
 
-    private func _sendAsync(_ message: KafkaProducerMessage) throws -> UInt {
+    private func _sendAsync(_ message: KafkaProducerMessage, continuation: CheckedContinuation<UInt, Error>) {
+        dispatchPrecondition(condition: .onQueue(self.serialQueue))
+        assert(self.state == .started)
+
         let topicHandle = self.createTopicHandleIfNeeded(topic: message.topic)
 
         let keyBytes: [UInt8]?
@@ -226,10 +244,11 @@ public actor KafkaProducer {
         }
 
         guard responseCode == 0 else {
-            throw KafkaError.rdKafkaError(wrapping: rd_kafka_last_error())
+            continuation.resume(throwing: KafkaError.rdKafkaError(wrapping: rd_kafka_last_error()))
+            return
         }
 
-        return self.messageIDCounter
+        continuation.resume(returning: self.messageIDCounter)
     }
 
     // Closure that is executed when a message has been acknowledged by Kafka
@@ -258,6 +277,8 @@ public actor KafkaProducer {
     /// Check `topicHandles` for a handle matching the topic name and create a new handle if needed.
     /// - Parameter topic: The name of the topic that is addressed.
     private func createTopicHandleIfNeeded(topic: String) -> OpaquePointer? {
+        dispatchPrecondition(condition: .onQueue(self.serialQueue))
+
         if let handle = self.topicHandles[topic] {
             return handle
         } else {

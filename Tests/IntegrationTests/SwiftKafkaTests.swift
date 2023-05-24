@@ -68,7 +68,7 @@ final class SwiftKafkaTests: XCTestCase {
     }
 
     func testProduceAndConsumeWithConsumerGroup() async throws {
-        let producer = try await KafkaProducer(config: producerConfig, logger: .kafkaTest)
+        let producer = try KafkaProducer(config: producerConfig, logger: .kafkaTest)
         let consumer = try KafkaConsumer(
             topics: [uniqueTestTopic],
             groupID: "subscription-test-group-id",
@@ -103,7 +103,7 @@ final class SwiftKafkaTests: XCTestCase {
     }
 
     func testProduceAndConsumeWithAssignedTopicPartition() async throws {
-        let producer = try await KafkaProducer(config: producerConfig, logger: .kafkaTest)
+        let producer = try KafkaProducer(config: producerConfig, logger: .kafkaTest)
         let consumer = try KafkaConsumer(
             topic: uniqueTestTopic,
             partition: KafkaPartition(rawValue: 0),
@@ -141,7 +141,7 @@ final class SwiftKafkaTests: XCTestCase {
     func testProduceAndConsumeWithCommitSync() async throws {
         try self.consumerConfig.set("false", forKey: "enable.auto.commit")
 
-        let producer = try await KafkaProducer(config: producerConfig, logger: .kafkaTest)
+        let producer = try KafkaProducer(config: producerConfig, logger: .kafkaTest)
         let consumer = try KafkaConsumer(
             topics: [uniqueTestTopic],
             groupID: "commit-sync-test-group-id",
